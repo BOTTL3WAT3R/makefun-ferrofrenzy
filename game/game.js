@@ -1,6 +1,6 @@
 "use strict";
 /*
- * FERROFRENZY — Polarity Arena (v2)
+ * FERROFRENZY — Polarity Arena (v3)
  * An original canvas arcade game. You are FERRO, a magnet core.
  *
  *   - Flip your polarity with SPACE / click: NORTH (cyan) or SOUTH (coral).
@@ -18,6 +18,12 @@
  *     with a polarity you choose. They bend shard trajectories for the
  *     whole run — park one by a wall and its repelled shards shatter
  *     themselves; cluster them badly and they funnel chaos onto you.
+ *     Each anchor is WIDE (200px reach) or STRONG (130px reach, double
+ *     force) — toggle with F while placing or carrying it.
+ *   - From wave 4 you also deploy POLARITY LENSES: gate discs that FLIP
+ *     the polarity of every shard passing through. A lens on your
+ *     approach lane turns like-shards into captures — and captures
+ *     into threats. Placement is a bet about which way you will flip.
  *   - Charge the PULSE with captures, fire it with E / right-click.
  *   - Clear wave 10 to stabilize the core and WIN. Hull 0 = core breach.
  */
@@ -31,8 +37,9 @@
     bg: "#070b1a", grid: "rgba(90,130,220,0.07)",
     north: "#35e0ff", south: "#ff5470",
     mine: "#ffc94d", twin: "#c77dff", text: "#eaf4ff", dim: "#8fa8cc",
-    good: "#5dff9d", bad: "#ff5470", energy: "#b78bff"
+    good: "#5dff9d", bad: "#ff5470", energy: "#b78bff", lens: "#d9ecff"
   };
+  var LENS_R = 46; // polarity lens gate-disc radius
 
   // ---------- rng (seedable for reproducible test runs) ----------
   var rnd = Math.random;
@@ -49,7 +56,7 @@
   var mouse = { x: W / 2, y: H / 2, inside: false };
   window.addEventListener("keydown", function (e) {
     keys[e.code] = true;
-    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].indexOf(e.code) >= 0) e.preventDefault();
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space", "Tab"].indexOf(e.code) >= 0) e.preventDefault();
     onKey(e.code);
   });
   window.addEventListener("keyup", function (e) { keys[e.code] = false; });
@@ -79,6 +86,17 @@
     if (state.mode === "deploy") {
       if (code === "Enter") confirmDeploy();
       if (code === "Space" || code === "KeyQ") deployGhost.north = !deployGhost.north;
+      if (code === "KeyT" || code === "Tab") {
+        deployGhost.type = deployGhost.type === "anchor" ? "lens" : "anchor";
+        AU.click();
+      }
+      if (code === "KeyF") {
+        deployGhost.mode = deployGhost.mode === "wide" ? "strong" : "wide";
+        if (deployGhost.carrying >= 0 && state.anchors[deployGhost.carrying]) {
+          state.anchors[deployGhost.carrying].mode = deployGhost.mode;
+        }
+        AU.click();
+      }
       if (code === "KeyP" || code === "Escape") state.paused = !state.paused;
       return;
     }
@@ -106,6 +124,18 @@
   (function makeStars() {
     for (var i = 0; i < 90; i++) stars.push({ x: Math.random() * W, y: Math.random() * H, r: Math.random() * 1.6 + 0.4, p: Math.random() * 6.28 });
   })();
+  // ambient motes: slow reactor dust drifting through the arena, so a
+  // busy late-wave frame has depth behind the action (pure decoration)
+  var motes = [];
+  (function makeMotes() {
+    for (var i = 0; i < 46; i++) {
+      motes.push({
+        x: Math.random() * W, y: Math.random() * H,
+        vx: (Math.random() - 0.5) * 9, vy: -3 - Math.random() * 8,
+        r: Math.random() * 1.9 + 0.6, p: Math.random() * 6.28
+      });
+    }
+  })();
   // iron filings: fixed home points that orient along the local field
   var filings = [];
   (function makeFilings() {
@@ -129,11 +159,12 @@
       mode: "title", paused: false, t: 0,
       score: 0, best: bestScore(), wave: 0,
       shards: [], mines: [], parts: [], floats: [],
-      anchors: [], anchorSlots: 0, pendingWave: 0, nextComp: null,
+      anchors: [], anchorSlots: 0, lenses: [], lensSlots: 0,
+      pendingWave: 0, nextComp: null,
       spawnQueue: 0, twinQueue: 0, spawnTimer: 0, minesQueue: 0,
       waveBanner: 0, shake: 0,
       endless: false, timePlayed: 0,
-      stats: { captures: 0, shatters: 0, mineSmashes: 0, overloads: 0, splits: 0 }
+      stats: { captures: 0, shatters: 0, mineSmashes: 0, overloads: 0, splits: 0, lensFlips: 0 }
     };
   }
   resetState();
@@ -166,9 +197,12 @@
 
   // ---------- waves & deployment ----------
   function compFor(n) {
+    // v3 tuning (bot-measured, see README): slightly thinner twin share
+    // and one fewer mine at the cap — waves 7-9 were killing a decent
+    // autopilot with overload chains before it could spend its hull.
     var shards = Math.min(5 + n * 2, 26);
-    var twins = n >= 3 ? Math.round(shards * 0.18) : 0;
-    var mines = n >= 2 ? Math.min(Math.floor((n - 1) * 0.9), 6) : 0;
+    var twins = n >= 3 ? Math.round(shards * 0.16) : 0;
+    var mines = n >= 2 ? Math.min(Math.floor((n - 1) * 0.9), 5) : 0;
     return { shards: shards - twins, twins: twins, mines: mines };
   }
   function slotsFor(n) {
@@ -177,6 +211,15 @@
     if (n <= 5) return 3;
     return 4;
   }
+  function lensesFor(n) {
+    if (n < 4) return 0;
+    if (n <= 6) return 1;
+    return 2;
+  }
+  // an anchor's reach and strength: WIDE covers more sky, STRONG bends
+  // what enters its smaller sky twice as hard. One bit, a real trade.
+  function anchorRadius(a) { return a.mode === "strong" ? 130 : 200; }
+  function anchorForce(a) { return a.mode === "strong" ? 68000 : 34000; }
 
   function beginWave(n) {
     state.wave = n;
@@ -193,10 +236,15 @@
   function enterDeploy() {
     state.pendingWave = state.wave + 1;
     state.anchorSlots = slotsFor(state.pendingWave);
+    state.lensSlots = lensesFor(state.pendingWave);
     state.nextComp = compFor(state.pendingWave);
     if (state.anchors.length > state.anchorSlots) state.anchors.length = state.anchorSlots;
+    if (state.lenses.length > state.lensSlots) state.lenses.length = state.lensSlots;
     deployGhost.north = true;
     deployGhost.carrying = -1;
+    deployGhost.carryingLens = -1;
+    deployGhost.type = "anchor";
+    deployGhost.mode = "wide";
     state.mode = "deploy";
     AU.click();
   }
@@ -204,11 +252,14 @@
   function confirmDeploy() {
     if (state.mode !== "deploy") return;
     deployGhost.carrying = -1;
+    deployGhost.carryingLens = -1;
     beginWave(state.pendingWave);
   }
 
   // ghost / placement state for the deployment phase
-  var deployGhost = { north: true, carrying: -1 }; // carrying: index of anchor being moved, -1 = placing new
+  // carrying: index of anchor being moved (-1 = placing new); carryingLens likewise;
+  // type: what a fresh click places ("anchor" | "lens"); mode: anchor strength being placed
+  var deployGhost = { north: true, carrying: -1, carryingLens: -1, type: "anchor", mode: "wide" };
 
   function anchorPosOK(x, y, skipIdx) {
     if (x < 44 || x > W - 44 || y < TOP + 46 || y > H - 44) return false;
@@ -222,42 +273,92 @@
     return true;
   }
 
+  function lensPosOK(x, y, skipIdx) {
+    if (x < 52 || x > W - 52 || y < TOP + 52 || y > H - 44) return false;
+    var dx = x - player.x, dy = y - player.y;
+    if (dx * dx + dy * dy < 88 * 88) return false; // not on top of the core
+    var i, ax, ay;
+    for (i = 0; i < state.anchors.length; i++) {
+      ax = x - state.anchors[i].x; ay = y - state.anchors[i].y;
+      if (ax * ax + ay * ay < 72 * 72) return false; // keep gates clear of anchors
+    }
+    for (i = 0; i < state.lenses.length; i++) {
+      if (i === skipIdx) continue;
+      ax = x - state.lenses[i].x; ay = y - state.lenses[i].y;
+      if (ax * ax + ay * ay < 100 * 100) return false; // discs must not overlap
+    }
+    return true;
+  }
+
   function deployClick(x, y) {
     var i, b;
     for (i = 0; i < buttons.length; i++) {
       b = buttons[i];
       if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) { b.fn(); return; }
     }
-    // pick up an existing anchor?
-    for (i = 0; i < state.anchors.length; i++) {
-      var a = state.anchors[i];
-      var dx = x - a.x, dy = y - a.y;
-      if (dx * dx + dy * dy < 26 * 26) {
-        if (deployGhost.carrying === i) { // click the carried anchor again: flip its polarity in place
-          a.north = !a.north; deployGhost.north = a.north; AU.flip(a.north); return;
-        }
-        deployGhost.carrying = i;
-        deployGhost.north = a.north;
-        AU.click();
-        return;
-      }
-    }
+    // clicking the anchor you are carrying flips its polarity in place
     if (deployGhost.carrying >= 0) {
-      var ca = state.anchors[deployGhost.carrying];
+      var ca0 = state.anchors[deployGhost.carrying];
+      var cdx = x - ca0.x, cdy = y - ca0.y;
+      if (cdx * cdx + cdy * cdy < 26 * 26) {
+        ca0.north = !ca0.north; deployGhost.north = ca0.north; AU.flip(ca0.north); return;
+      }
       if (anchorPosOK(x, y, deployGhost.carrying)) {
-        ca.x = x; ca.y = y; ca.north = deployGhost.north;
+        ca0.x = x; ca0.y = y; ca0.north = deployGhost.north; ca0.mode = deployGhost.mode;
         deployGhost.carrying = -1;
         AU.place();
       }
       return;
     }
+    // drop a carried lens
+    if (deployGhost.carryingLens >= 0) {
+      var cl0 = state.lenses[deployGhost.carryingLens];
+      if (lensPosOK(x, y, deployGhost.carryingLens)) {
+        cl0.x = x; cl0.y = y;
+        deployGhost.carryingLens = -1;
+        AU.place();
+      }
+      return;
+    }
+    // pick up an existing anchor?
+    for (i = 0; i < state.anchors.length; i++) {
+      var a = state.anchors[i];
+      var dx = x - a.x, dy = y - a.y;
+      if (dx * dx + dy * dy < 26 * 26) {
+        deployGhost.carrying = i;
+        deployGhost.north = a.north;
+        deployGhost.mode = a.mode || "wide";
+        deployGhost.type = "anchor";
+        AU.click();
+        return;
+      }
+    }
+    // pick up an existing lens?
+    for (i = 0; i < state.lenses.length; i++) {
+      var l = state.lenses[i];
+      var lx = x - l.x, ly = y - l.y;
+      if (lx * lx + ly * ly < (LENS_R + 6) * (LENS_R + 6)) {
+        deployGhost.carryingLens = i;
+        deployGhost.type = "lens";
+        AU.click();
+        return;
+      }
+    }
+    // place something new, of the ghost's current type
+    if (deployGhost.type === "lens") {
+      if (state.lenses.length < state.lensSlots && lensPosOK(x, y, -1)) {
+        state.lenses.push({ x: x, y: y, flash: 0 });
+        AU.place();
+      }
+      return;
+    }
     if (state.anchors.length < state.anchorSlots && anchorPosOK(x, y, -1)) {
-      state.anchors.push({ x: x, y: y, north: deployGhost.north, pulse: 1 });
+      state.anchors.push({ x: x, y: y, north: deployGhost.north, pulse: 1, mode: deployGhost.mode });
       AU.place();
     }
   }
 
-  function spawnInterval() { return Math.max(0.85 - state.wave * 0.045, 0.34); }
+  function spawnInterval() { return Math.max(0.88 - state.wave * 0.045, 0.36); }
 
   function spawnShard(kind) {
     var side = Math.floor(rnd() * 4), x, y;
@@ -271,7 +372,8 @@
       x: x, y: y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
       r: kind === "twin" ? 17 : (kind === "mini" ? 8 : 11 + rnd() * 4),
       north: rnd() < 0.5, kind: kind || "norm",
-      rot: rnd() * 6.28, vr: (rnd() - 0.5) * 2.4, trail: []
+      rot: rnd() * 6.28, vr: (rnd() - 0.5) * 2.4, trail: [],
+      inLens: false, lensCd: 0
     });
   }
 
@@ -298,7 +400,8 @@
         x: s.x + Math.cos(a) * 27, y: s.y + Math.sin(a) * 27,
         vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
         r: 8, north: k === 0, kind: "mini",
-        rot: rnd() * 6.28, vr: (rnd() - 0.5) * 4, trail: []
+        rot: rnd() * 6.28, vr: (rnd() - 0.5) * 4, trail: [],
+        inLens: false, lensCd: 0.35
       });
     }
   }
@@ -390,11 +493,12 @@
     fx += dx * F; fy += dy * F;
     for (i = 0; i < state.anchors.length; i++) {
       var a = state.anchors[i];
+      var ar = anchorRadius(a);
       dx = a.x - x; dy = a.y - y; d2 = dx * dx + dy * dy;
-      if (d2 > 200 * 200 || d2 < 30 * 30) continue;
+      if (d2 > ar * ar || d2 < 30 * 30) continue;
       d = Math.sqrt(d2) || 1;
       sgn = (north !== a.north) ? 1 : -1;
-      F = sgn * 34000 / Math.max(50, d) / d;
+      F = sgn * anchorForce(a) / Math.max(50, d) / d;
       fx += dx * F; fy += dy * F;
     }
     return { x: fx, y: fy };
@@ -411,15 +515,46 @@
       var a = state.anchors[i];
       var dx = a.x - s.x, dy = a.y - s.y;
       var d = Math.sqrt(dx * dx + dy * dy) || 1;
-      if (d > 200) continue;
+      if (d > anchorRadius(a)) continue;
       inField = true;
       if (d < 30) continue;
-      var F = 34000 / Math.max(50, d);
+      var F = anchorForce(a) / Math.max(50, d);
       var sgn = (s.north !== a.north) ? 1 : -1;
       s.vx += (dx / d) * F * dt * 3.2 * sgn;
       s.vy += (dy / d) * F * dt * 3.2 * sgn;
     }
     return inField;
+  }
+
+  // polarity lenses: a shard crossing a gate disc flips polarity, once
+  // per pass (it must leave the disc before it can flip again, and a
+  // short cooldown keeps newborn minis from double-flipping in place).
+  // Returns true when a flip happened, so the caller can re-derive the
+  // shard's relation to the core for this frame's contact check.
+  function applyLenses(s, dt) {
+    if (s.lensCd > 0) s.lensCd -= dt;
+    var flipped = false;
+    for (var i = 0; i < state.lenses.length; i++) {
+      var l = state.lenses[i];
+      var dx = l.x - s.x, dy = l.y - s.y;
+      var d2 = dx * dx + dy * dy;
+      if (d2 < LENS_R * LENS_R) {
+        if (!s.inLens && s.lensCd <= 0) {
+          s.north = !s.north;
+          s.inLens = true;
+          s.lensCd = 0.7;
+          l.flash = 1;
+          state.stats.lensFlips++;
+          burst(s.x, s.y, COL.lens, 7, 130);
+          floater(s.x, s.y - 16, "⇋ FLIP", COL.lens);
+          if (AU.lens) AU.lens();
+          flipped = true;
+        }
+      } else if (d2 > (LENS_R + 10) * (LENS_R + 10)) {
+        s.inLens = false;
+      }
+    }
+    return flipped;
   }
 
   // ---------- update ----------
@@ -437,6 +572,9 @@
     }
     for (i = 0; i < state.anchors.length; i++) {
       if (state.anchors[i].pulse > 0) state.anchors[i].pulse = Math.max(0, state.anchors[i].pulse - dt * 2);
+    }
+    for (i = 0; i < state.lenses.length; i++) {
+      if (state.lenses[i].flash > 0) state.lenses[i].flash = Math.max(0, state.lenses[i].flash - dt * 2.4);
     }
     // filings follow the field of a NORTH test charge (pretty + informative)
     if (state.mode === "playing" || state.mode === "deploy") {
@@ -525,6 +663,10 @@
       if (s.trail.length > 7) s.trail.shift();
       for (j = s.trail.length - 1; j >= 0; j--) { s.trail[j].life -= dt; if (s.trail[j].life <= 0) s.trail.splice(j, 1); }
 
+      // polarity lenses flip a crossing shard; contact below must judge
+      // the shard by its NEW polarity, so refresh the relation here
+      if (applyLenses(s, dt)) opposite = s.north !== player.north;
+
       // wall shatter for fast shards
       if ((s.x < s.r || s.x > W - s.r || s.y < s.r + TOP || s.y > H - s.r) && spd > 255) {
         burst(s.x, s.y, s.north ? COL.north : COL.south, 12, 200);
@@ -588,7 +730,7 @@
       var mdx = player.x - m.x, mdy = player.y - m.y;
       var md = Math.sqrt(mdx * mdx + mdy * mdy) || 1;
       m.vx += (mdx / md) * 130 * dt; m.vy += (mdy / md) * 130 * dt;
-      var msp = Math.sqrt(m.vx * m.vx + m.vy * m.vy), MAXM = 62 + state.wave * 2;
+      var msp = Math.sqrt(m.vx * m.vx + m.vy * m.vy), MAXM = 58 + state.wave * 2;
       if (msp > MAXM) { m.vx *= MAXM / msp; m.vy *= MAXM / msp; }
       m.x += m.vx * dt; m.y += m.vy * dt; m.rot += dt * 0.9;
       m.x = Math.max(m.r, Math.min(W - m.r, m.x));
@@ -661,6 +803,17 @@
       ctx.globalAlpha = 0.35 + 0.3 * Math.sin(state.t * 1.4 + st.p);
       ctx.fillStyle = "#bcd7ff";
       ctx.fillRect(st.x, st.y, st.r, st.r);
+    }
+    ctx.globalAlpha = 1;
+    // drifting reactor dust (positions advance in draw: purely visual)
+    for (var mi = 0; mi < motes.length; mi++) {
+      var mo = motes[mi];
+      mo.x += mo.vx * 0.016; mo.y += mo.vy * 0.016;
+      if (mo.y < TOP - 6) { mo.y = H + 4; mo.x = Math.random() * W; }
+      if (mo.x < -6) mo.x = W + 4; else if (mo.x > W + 6) mo.x = -4;
+      ctx.globalAlpha = 0.10 + 0.10 * Math.sin(state.t * 0.9 + mo.p);
+      ctx.fillStyle = "#cfe4ff";
+      ctx.beginPath(); ctx.arc(mo.x, mo.y, mo.r, 0, 6.283); ctx.fill();
     }
     ctx.globalAlpha = 1;
     // iron filings: tiny segments aligned with the live magnetic field
@@ -750,15 +903,21 @@
 
   function drawAnchor(a, ghost) {
     var c = a.north ? COL.north : COL.south;
+    var strong = a.mode === "strong";
     ctx.save();
     ctx.translate(a.x, a.y);
-    // field ring: the reach its shards feel
-    var fr = 200;
+    // field ring: the reach its shards feel (STRONG pulls a smaller sky)
+    var fr = anchorRadius(a);
     ctx.strokeStyle = c;
     ctx.globalAlpha = ghost ? 0.35 : 0.13 + (a.pulse || 0) * 0.25;
-    ctx.lineWidth = 1.5; ctx.setLineDash([4, 9]); ctx.lineDashOffset = state.t * 10;
+    ctx.lineWidth = strong ? 2.4 : 1.5; ctx.setLineDash([4, 9]); ctx.lineDashOffset = state.t * 10;
     ctx.beginPath(); ctx.arc(0, 0, fr, 0, 6.283); ctx.stroke();
     ctx.setLineDash([]);
+    if (strong) { // a second, tighter ring marks the doubled force
+      ctx.globalAlpha = ghost ? 0.3 : 0.16;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.arc(0, 0, fr * 0.55, 0, 6.283); ctx.stroke();
+    }
     // satellite body: a small diamond pylon
     ctx.globalAlpha = ghost ? 0.75 : 1;
     ctx.shadowColor = c; ctx.shadowBlur = ghost ? 6 : 13;
@@ -774,6 +933,41 @@
     ctx.fillStyle = c;
     ctx.font = "bold 13px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText(a.north ? "−" : "+", 0, 1);
+    if (strong) {
+      ctx.fillStyle = "#ffd35c";
+      ctx.font = "bold 9px sans-serif";
+      ctx.fillText("×2", 0, 22);
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+
+  function drawLens(l, ghost) {
+    ctx.save();
+    ctx.translate(l.x, l.y);
+    var fl = l.flash || 0;
+    ctx.globalAlpha = ghost ? 0.7 : 1;
+    // gate disc: a pale prism that swaps whatever passes through it
+    var grad = ctx.createRadialGradient(0, 0, 4, 0, 0, LENS_R);
+    grad.addColorStop(0, "rgba(217,236,255," + (0.10 + fl * 0.30) + ")");
+    grad.addColorStop(0.8, "rgba(150,180,255," + (0.05 + fl * 0.15) + ")");
+    grad.addColorStop(1, "rgba(150,180,255,0)");
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(0, 0, LENS_R, 0, 6.283); ctx.fill();
+    // rim: two counter-rotating dashed arcs, cyan one way, coral back
+    ctx.lineWidth = 2.2;
+    ctx.strokeStyle = COL.north; ctx.globalAlpha = (ghost ? 0.5 : 0.75) + fl * 0.25;
+    ctx.setLineDash([14, 10]); ctx.lineDashOffset = state.t * 22;
+    ctx.beginPath(); ctx.arc(0, 0, LENS_R - 2, 0, 6.283); ctx.stroke();
+    ctx.strokeStyle = COL.south;
+    ctx.setLineDash([14, 10]); ctx.lineDashOffset = -state.t * 22;
+    ctx.beginPath(); ctx.arc(0, 0, LENS_R - 8, 0, 6.283); ctx.stroke();
+    ctx.setLineDash([]);
+    // swap glyph
+    ctx.globalAlpha = ghost ? 0.8 : 0.95;
+    ctx.fillStyle = COL.lens;
+    ctx.font = "bold 21px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("⇋", 0, 1);
     ctx.restore();
     ctx.globalAlpha = 1;
   }
@@ -833,8 +1027,8 @@
     var pc = player.north ? COL.north : COL.south;
     ctx.fillStyle = pc; rr(W / 2 - 62, 48, 124, 22, 11); ctx.fill();
     text(player.north ? "NORTH −" : "SOUTH +", W / 2, 59, "bold 13px 'Segoe UI', sans-serif", "#07101f");
-    if (state.anchors.length > 0) {
-      text("⚓ " + state.anchors.length, 16, 59, "bold 13px 'Segoe UI', sans-serif", COL.dim, "left");
+    if (state.anchors.length > 0 || state.lenses.length > 0) {
+      text("⚓ " + state.anchors.length + (state.lenses.length > 0 ? "   ⇋ " + state.lenses.length : ""), 16, 59, "bold 13px 'Segoe UI', sans-serif", COL.dim, "left");
     }
   }
 
@@ -850,7 +1044,8 @@
       ["LIKES", "are pushed away: slam them into a wall to SHATTER (+50)"],
       ["DANGER", "a like shard that touches you, and gold FERAL MINES, cost 1 hull"],
       ["TWINCORES", "violet diamonds SPLIT when destroyed — two minis, opposite poles"],
-      ["ANCHORS", "between waves, place magnet satellites: they bend every shard's path"],
+      ["ANCHORS", "between waves, place magnet satellites (WIDE or STRONG, F): they bend every shard's path"],
+      ["LENSES", "from wave 4, place gate discs: shards passing through FLIP polarity"],
       ["E / RIGHT-CLICK", "fire the PULSE when the violet bar is full"],
       ["GOAL", "clear WAVE 10 to stabilize the core and win · 5 hull · WASD/arrows move"]
     ];
@@ -865,30 +1060,36 @@
   }
 
   function drawDeploy() {
-    // placed anchors + ghost
-    var i;
-    for (i = 0; i < state.anchors.length; i++) {
-      if (i === deployGhost.carrying) continue; // the carried one rides the cursor
-      drawAnchor(state.anchors[i], false);
-    }
-    var placing = deployGhost.carrying >= 0 || state.anchors.length < state.anchorSlots;
-    if (placing && mouse.inside) {
-      var ok = anchorPosOK(mouse.x, mouse.y, deployGhost.carrying);
-      ctx.globalAlpha = ok ? 1 : 0.45;
-      drawAnchor({ x: mouse.x, y: mouse.y, north: deployGhost.north, pulse: 0 }, true);
-      ctx.globalAlpha = 1;
-      if (!ok) text("✕", mouse.x, mouse.y - 30, "bold 16px sans-serif", COL.bad);
+    // placed anchors + lenses (render() already drew them; here only the ghost)
+    var placingAnchor = deployGhost.carrying >= 0 || (deployGhost.type === "anchor" && state.anchors.length < state.anchorSlots);
+    var placingLens = deployGhost.carryingLens >= 0 || (deployGhost.type === "lens" && state.lenses.length < state.lensSlots);
+    if ((placingAnchor || placingLens) && mouse.inside) {
+      if (placingLens) {
+        var lok = lensPosOK(mouse.x, mouse.y, deployGhost.carryingLens);
+        ctx.globalAlpha = lok ? 1 : 0.45;
+        drawLens({ x: mouse.x, y: mouse.y, flash: 0 }, true);
+        ctx.globalAlpha = 1;
+        if (!lok) text("✕", mouse.x, mouse.y - LENS_R - 12, "bold 16px sans-serif", COL.bad);
+      } else {
+        var ok = anchorPosOK(mouse.x, mouse.y, deployGhost.carrying);
+        ctx.globalAlpha = ok ? 1 : 0.45;
+        drawAnchor({ x: mouse.x, y: mouse.y, north: deployGhost.north, pulse: 0, mode: deployGhost.mode }, true);
+        ctx.globalAlpha = 1;
+        if (!ok) text("✕", mouse.x, mouse.y - 30, "bold 16px sans-serif", COL.bad);
+      }
     }
     // panel
     ctx.fillStyle = "rgba(5,8,20,0.82)"; ctx.fillRect(0, H - 118, W, 118);
     ctx.strokeStyle = "rgba(90,130,220,0.3)"; ctx.beginPath(); ctx.moveTo(0, H - 117.5); ctx.lineTo(W, H - 117.5); ctx.stroke();
-    text("DEPLOY ANCHORS — WAVE " + state.pendingWave + " INCOMING", W / 2, H - 100, "900 21px 'Segoe UI', sans-serif", COL.text);
+    text("DEPLOY — WAVE " + state.pendingWave + " INCOMING", W / 2, H - 100, "900 21px 'Segoe UI', sans-serif", COL.text);
     var c = state.nextComp;
     text("incoming: " + (c.shards + c.twins) + " shards" + (c.twins ? " (incl. " + c.twins + " twincores)" : "") + "  ·  " + c.mines + " feral mines" +
-         "      anchors placed: " + state.anchors.length + " / " + state.anchorSlots +
-         "      placing: " + (deployGhost.north ? "NORTH −" : "SOUTH +"),
+         "      anchors: " + state.anchors.length + " / " + state.anchorSlots +
+         (state.lensSlots > 0 ? "      lenses: " + state.lenses.length + " / " + state.lensSlots : ""),
          W / 2, H - 74, "14px 'Segoe UI', sans-serif", COL.dim);
-    text("CLICK place / move an anchor · SPACE flips the polarity you place · anchors repel their own colour, pull the other",
+    text("placing: " + (deployGhost.type === "lens" ? "LENS ⇋ (flips shards that cross it)"
+          : "ANCHOR " + (deployGhost.north ? "NORTH −" : "SOUTH +") + " · " + (deployGhost.mode === "strong" ? "STRONG ×2, 130px" : "WIDE, 200px")) +
+         "      CLICK place / move · T anchor⇄lens · SPACE polarity · F wide⇄strong",
          W / 2, H - 52, "13px 'Segoe UI', sans-serif", COL.dim);
     buttons = [];
     drawButton(W / 2 - 120, H - 32, 240, 28, "▶  LAUNCH WAVE " + state.pendingWave + "  (Enter)", confirmDeploy, COL.good);
@@ -901,7 +1102,7 @@
              : "The shards scattered your core across the arena.", W / 2, 226, "17px 'Segoe UI', sans-serif", COL.text);
     text("FINAL SCORE   " + state.score, W / 2, 282, "bold 30px 'Segoe UI', sans-serif", COL.text);
     var st = state.stats;
-    text("Captures " + st.captures + "   ·   Shatters " + st.shatters + "   ·   Mine smashes " + st.mineSmashes + "   ·   Twincores split " + st.splits + "   ·   Overloads " + st.overloads,
+    text("Captures " + st.captures + "   ·   Shatters " + st.shatters + "   ·   Mine smashes " + st.mineSmashes + "   ·   Twincores split " + st.splits + "   ·   Lens flips " + st.lensFlips + "   ·   Overloads " + st.overloads,
          W / 2, 318, "15px 'Segoe UI', sans-serif", COL.dim);
     text("Wave reached " + state.wave + "   ·   Best " + state.best + "   ·   Time " + Math.floor(state.timePlayed) + "s", W / 2, 344, "16px 'Segoe UI', sans-serif", COL.dim);
     buttons = [];
@@ -919,6 +1120,10 @@
     for (i = 0; i < state.anchors.length; i++) {
       if (state.mode === "deploy" && i === deployGhost.carrying) continue;
       drawAnchor(state.anchors[i], false);
+    }
+    for (i = 0; i < state.lenses.length; i++) {
+      if (state.mode === "deploy" && i === deployGhost.carryingLens) continue;
+      drawLens(state.lenses[i], false);
     }
     for (i = 0; i < state.mines.length; i++) drawMine(state.mines[i]);
     for (i = 0; i < state.shards.length; i++) drawShard(state.shards[i]);
@@ -960,7 +1165,14 @@
   function frame(ts) {
     var dt = Math.min(0.033, last ? (ts - last) / 1000 : 0.016);
     last = ts;
-    update(dt);
+    // test hook: the maker's harness may set __FERRO_SPEED to step the
+    // simulation several fixed steps per frame (long bot runs); absent
+    // the hook the game steps exactly once, as shipped.
+    var steps = 1;
+    if (typeof window.__FERRO_SPEED === "number") {
+      steps = Math.max(1, Math.min(6, Math.round(window.__FERRO_SPEED)));
+    }
+    for (var k = 0; k < steps; k++) update(dt);
     render();
     requestAnimationFrame(frame);
   }
@@ -974,6 +1186,7 @@
     startRun: startRun,
     confirmDeploy: confirmDeploy,
     enterDeploy: enterDeploy,
-    beginWave: beginWave
+    beginWave: beginWave,
+    deployClick: deployClick
   };
 })();

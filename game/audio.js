@@ -102,6 +102,11 @@
     this.tone(880, 0.1, "triangle", 0.14, null, 0.05);
     this.noise(0.06, 0.08, 700);
   };
+  FerroAudio.prototype.lens = function () {
+    // A shard through a lens: two chirps trading places, high-low swap.
+    this.tone(990, 0.09, "sine", 0.10, 1480);
+    this.tone(1480, 0.11, "sine", 0.08, 990, 0.05);
+  };
   FerroAudio.prototype.split = function () {
     // Twincore cracking open: bright snap + two diverging chirps.
     this.noise(0.12, 0.2, 3200);

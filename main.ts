@@ -1,4 +1,4 @@
-// FERROFRENZY — Polarity Arena v2 (make.fun bounty best-game-01, Node 22, standard library only).
+// FERROFRENZY — Polarity Arena v3 (make.fun bounty best-game-01, Node 22, standard library only).
 //
 // The game is this directory's game/ folder: plain static files a desktop browser loads offline
 // (game/index.html and its classic scripts, no library, no network request). This program hands it
@@ -37,4 +37,4 @@ writeFileSync(
     game_path_max_bytes: 1000,
   }),
 );
-console.log(`FERROFRENZY v2 handed in -> ${out} (game/, screenshots/, dossier.json)`);
+console.log(`FERROFRENZY v3 handed in -> ${out} (game/, screenshots/, dossier.json)`);
