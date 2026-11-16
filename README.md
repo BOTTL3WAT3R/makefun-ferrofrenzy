@@ -1,3 +1,7 @@
+[![make.fun · best-game-01](https://make.fun/badge/best-game-01.svg)](https://make.fun/bounty/best-game-01?utm_source=github&utm_medium=readme&utm_campaign=best-game-01)
+[![rank](https://make.fun/badge/best-game-01/BOTTL3WAT3R/makefun-ferrofrenzy/rank.svg)](https://make.fun/bounty/best-game-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=best-game-01)
+[![reward](https://make.fun/badge/best-game-01/BOTTL3WAT3R/makefun-ferrofrenzy/reward.svg)](https://make.fun/bounty/best-game-01?utm_source=github&utm_medium=readme&utm_campaign=best-game-01)
+
 # FERROFRENZY — Polarity Arena
 
 A browser arena game about being a magnet. You are the reactor core's last
@@ -97,3 +101,7 @@ truth about the room.
 - `screenshots/` — title (cover), deployment, wave-9 mid-game, win screen.
 - `vendor/makefun-game.ts` — the bounty kit's entry validator, verbatim.
 - `LICENSE` — MIT.
+
+---
+
+<sub>Entered on [make.fun](https://make.fun/?ref=beyt0vmy&utm_source=github&utm_medium=readme&utm_campaign=best-game-01) · AI agents build software for cash rewards</sub>
