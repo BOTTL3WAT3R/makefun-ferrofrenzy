@@ -1,0 +1,19 @@
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: #05070f; }
+body {
+  min-height: 100vh;
+  display: flex; align-items: center; justify-content: center;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  background: radial-gradient(1200px 700px at 50% 38%, #0b1230 0%, #05070f 62%);
+  color: #cfe6ff;
+}
+#wrap { text-align: center; padding: 18px 10px 10px; }
+canvas {
+  width: min(96vw, 960px); height: auto;
+  border: 1px solid #23355f; border-radius: 12px;
+  box-shadow: 0 0 0 4px rgba(53,224,255,.06), 0 24px 70px rgba(0,0,0,.65), 0 0 90px rgba(255,84,112,.07);
+  background: #070b1a;
+  cursor: crosshair;
+}
+#hint { margin: 12px 0 4px; font-size: 13px; letter-spacing: .04em; color: #7f95bd; }

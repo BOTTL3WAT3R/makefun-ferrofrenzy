@@ -1044,7 +1044,7 @@
       ["LIKES", "are pushed away: slam them into a wall to SHATTER (+50)"],
       ["DANGER", "a like shard that touches you, and gold FERAL MINES, cost 1 hull"],
       ["TWINCORES", "violet diamonds SPLIT when destroyed — two minis, opposite poles"],
-      ["ANCHORS", "between waves, place magnet satellites (WIDE or STRONG, F): they bend every shard's path"],
+      ["ANCHORS", "between waves, place magnet satellites — WIDE or STRONG (F)"],
       ["LENSES", "from wave 4, place gate discs: shards passing through FLIP polarity"],
       ["E / RIGHT-CLICK", "fire the PULSE when the violet bar is full"],
       ["GOAL", "clear WAVE 10 to stabilize the core and win · 5 hull · WASD/arrows move"]
