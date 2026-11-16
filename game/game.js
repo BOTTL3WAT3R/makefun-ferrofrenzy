@@ -307,7 +307,7 @@
         ca0.x = x; ca0.y = y; ca0.north = deployGhost.north; ca0.mode = deployGhost.mode;
         deployGhost.carrying = -1;
         AU.place();
-      }
+      } else floater(x, y - 24, "✕ too close to the core, an anchor or the edge", COL.bad);
       return;
     }
     // drop a carried lens
@@ -317,7 +317,7 @@
         cl0.x = x; cl0.y = y;
         deployGhost.carryingLens = -1;
         AU.place();
-      }
+      } else floater(x, y - 24, "✕ too close to the core, an anchor or another lens", COL.bad);
       return;
     }
     // pick up an existing anchor?
@@ -346,16 +346,18 @@
     }
     // place something new, of the ghost's current type
     if (deployGhost.type === "lens") {
-      if (state.lenses.length < state.lensSlots && lensPosOK(x, y, -1)) {
+      if (state.lenses.length >= state.lensSlots) floater(x, y - 24, "✕ no lens slots left", COL.bad);
+      else if (lensPosOK(x, y, -1)) {
         state.lenses.push({ x: x, y: y, flash: 0 });
         AU.place();
-      }
+      } else floater(x, y - 24, "✕ too close to the core, an anchor or another lens", COL.bad);
       return;
     }
-    if (state.anchors.length < state.anchorSlots && anchorPosOK(x, y, -1)) {
+    if (state.anchors.length >= state.anchorSlots) floater(x, y - 24, "✕ no anchor slots left", COL.bad);
+    else if (anchorPosOK(x, y, -1)) {
       state.anchors.push({ x: x, y: y, north: deployGhost.north, pulse: 1, mode: deployGhost.mode });
       AU.place();
-    }
+    } else floater(x, y - 24, "✕ too close to the core, an anchor or the edge", COL.bad);
   }
 
   function spawnInterval() { return Math.max(0.88 - state.wave * 0.045, 0.36); }
