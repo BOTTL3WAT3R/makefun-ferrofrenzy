@@ -26,6 +26,11 @@
  *     into threats. Placement is a bet about which way you will flip.
  *   - Charge the PULSE with captures, fire it with E / right-click.
  *   - Clear wave 10 to stabilize the core and WIN. Hull 0 = core breach.
+ *   - The run is a CAMPAIGN: five named chapters of two waves each,
+ *     every chapter leaning on one mechanic and ending in a boss wave.
+ *     STORM WARDENS (scaled twincores with hit points) guard waves
+ *     2/4/6/8; THE FERROUS HEART itself ends wave 10. Fell it to win
+ *     the campaign — endless mode unlocks afterwards.
  */
 (function () {
   var W = 960, H = 600, TOP = 44;
@@ -162,9 +167,10 @@
       anchors: [], anchorSlots: 0, lenses: [], lensSlots: 0,
       pendingWave: 0, nextComp: null,
       spawnQueue: 0, twinQueue: 0, spawnTimer: 0, minesQueue: 0,
-      waveBanner: 0, shake: 0,
+      bossQueue: 0, bossHp: 0, waveSpawned: 0, waveTotal: 0,
+      waveBanner: 0, chapterBanner: 0, shake: 0,
       endless: false, timePlayed: 0,
-      stats: { captures: 0, shatters: 0, mineSmashes: 0, overloads: 0, splits: 0, lensFlips: 0 }
+      stats: { captures: 0, shatters: 0, mineSmashes: 0, overloads: 0, splits: 0, lensFlips: 0, bosses: 0 }
     };
   }
   resetState();
@@ -196,14 +202,43 @@
   }
 
   // ---------- waves & deployment ----------
+  // ---------- the campaign: five named chapters, two waves each ----------
+  // Every chapter opens with a name card that teaches one idea, leans
+  // its composition toward that mechanic, and ends with a boss wave:
+  // a STORM WARDEN (a scaled twincore with hit points) guards waves
+  // 2/4/6/8, and THE FERROUS HEART itself ends wave 10. Endless mode
+  // (waves 11+) keeps the arena running afterwards, wardens included.
+  var CHAPTERS = [
+    { wave: 1, num: "I", name: "FIRST POLARITY", line: "Opposites are pulled in — capture them. Likes repel — shatter them on the walls." },
+    { wave: 3, num: "II", name: "THE SPLITTING STORM", line: "Twincores split into opposite minis. Feral mines crawl at you, deaf to magnetism." },
+    { wave: 5, num: "III", name: "THE LENSFALL", line: "Lens gates flip whatever crosses them. Route a like through a lens and it becomes a capture." },
+    { wave: 7, num: "IV", name: "THE STRONG FIELD", line: "Your full architecture is online — four anchors, two lenses. Bend the storm; don't chase it." },
+    { wave: 9, num: "V", name: "THE FERROUS HEART", line: "Two waves left. The Heart of the storm beats at the end of wave 10 — still it, and the sky clears." }
+  ];
+  function chapterFor(wave) {
+    var c = CHAPTERS[0];
+    for (var i = 0; i < CHAPTERS.length; i++) if (wave >= CHAPTERS[i].wave) c = CHAPTERS[i];
+    return c;
+  }
+  function isChapterStart(wave) {
+    for (var i = 0; i < CHAPTERS.length; i++) if (CHAPTERS[i].wave === wave) return true;
+    return false;
+  }
+
   function compFor(n) {
     // v3 tuning (bot-measured, see README): slightly thinner twin share
     // and one fewer mine at the cap — waves 7-9 were killing a decent
     // autopilot with overload chains before it could spend its hull.
+    // Campaign pass: each chapter leans its mix toward its mechanic —
+    // the Lensfall (waves 5-6) breeds twincores, the Heart (9-10) both.
     var shards = Math.min(5 + n * 2, 26);
-    var twins = n >= 3 ? Math.round(shards * 0.16) : 0;
+    var twinShare = (n >= 5 && n <= 6) ? 0.22 : (n >= 9 ? 0.20 : 0.16);
+    var twins = n >= 3 ? Math.round(shards * twinShare) : 0;
     var mines = n >= 2 ? Math.min(Math.floor((n - 1) * 0.9), 5) : 0;
-    return { shards: shards - twins, twins: twins, mines: mines };
+    // chapter-final waves carry one boss; the wave-10 boss is the Heart
+    var bosses = 0, bossHp = 0;
+    if (n % 2 === 0) { bosses = 1; bossHp = n === 10 ? 5 : (n > 10 ? 4 : 3); }
+    return { shards: shards - twins, twins: twins, mines: mines, bosses: bosses, bossHp: bossHp };
   }
   function slotsFor(n) {
     if (n < 2) return 0;
@@ -227,8 +262,18 @@
     state.spawnQueue = c.shards;
     state.twinQueue = c.twins;
     state.minesQueue = c.mines;
-    state.spawnTimer = 0.4;
+    state.bossQueue = c.bosses;
+    state.bossHp = c.bossHp;
+    state.waveTotal = c.shards + c.twins + c.mines + c.bosses;
+    state.waveSpawned = 0;
+    // opening burst: the first two arrivals are already inbound when
+    // the banner lifts, so a fresh wave never opens on an empty arena.
+    // Arrival pacing only — composition, counts and speeds unchanged.
+    spawnOne();
+    spawnOne();
+    state.spawnTimer = spawnInterval();
     state.waveBanner = 2.0;
+    state.chapterBanner = isChapterStart(n) ? 3.0 : 0;
     state.mode = "playing";
     AU.wave();
   }
@@ -360,7 +405,31 @@
     } else floater(x, y - 24, "✕ too close to the core, an anchor or the edge", COL.bad);
   }
 
-  function spawnInterval() { return Math.max(0.88 - state.wave * 0.045, 0.36); }
+  function spawnInterval() {
+    // waves 1-2 deliver on a tighter clock so the opening has no dead
+    // air; from wave 3 on, the original ramp applies unchanged.
+    if (state.wave <= 2) return Math.max(0.66 - state.wave * 0.05, 0.5);
+    return Math.max(0.88 - state.wave * 0.045, 0.36);
+  }
+
+  // one arrival from the wave's queues, with the long-standing mix:
+  // mines trickle in at 22%, twincores at 45% while normals remain.
+  function spawnOne() {
+    // the chapter boss joins once two-fifths of its wave is inbound —
+    // late enough to have company, early enough to matter
+    if (state.bossQueue > 0 && state.waveSpawned >= Math.ceil(state.waveTotal * 0.4)) {
+      spawnBoss();
+      state.bossQueue--;
+      state.waveSpawned++;
+      return;
+    }
+    var roll = rnd();
+    if (state.minesQueue > 0 && (state.spawnQueue + state.twinQueue === 0 || roll < 0.22)) { spawnMine(); state.minesQueue--; }
+    else if (state.twinQueue > 0 && (state.spawnQueue === 0 || roll < 0.45)) { spawnShard("twin"); state.twinQueue--; }
+    else if (state.spawnQueue > 0) { spawnShard("norm"); state.spawnQueue--; }
+    else if (state.bossQueue > 0) { spawnBoss(); state.bossQueue--; }
+    state.waveSpawned++;
+  }
 
   function spawnShard(kind) {
     var side = Math.floor(rnd() * 4), x, y;
@@ -389,23 +458,84 @@
   }
 
   // a destroyed twincore bursts into two fast minis of opposite polarity
-  function splitTwin(s) {
-    state.stats.splits++;
+  // a chapter boss: a twincore scaled up, with hit points. It feels the
+  // same magnetism as any shard; destruction events (capture, wall
+  // shatter, field pop, pulse) cost it 1 hp instead of killing it,
+  // until the last point, when it bursts into minis like its kin.
+  function spawnBoss() {
+    var side = Math.floor(rnd() * 4), x, y;
+    if (side === 0) { x = rnd() * W; y = -52; }
+    else if (side === 1) { x = rnd() * W; y = H + 52; }
+    else if (side === 2) { x = -52; y = rnd() * H; }
+    else { x = W + 52; y = rnd() * H; }
+    var ang = Math.atan2(H / 2 - y, W / 2 - x) + (rnd() - 0.5) * 0.5;
+    var sp = 40 + rnd() * 25;
+    var heart = state.bossHp >= 5;
+    state.shards.push({
+      x: x, y: y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
+      r: heart ? 44 : 33,
+      north: rnd() < 0.5, kind: "boss",
+      hp: state.bossHp || 3, maxHp: state.bossHp || 3,
+      name: heart ? "THE FERROUS HEART" : "STORM WARDEN",
+      rot: rnd() * 6.28, vr: (rnd() - 0.5) * 1.1, trail: [],
+      inLens: false, lensCd: 0, bossCd: 0
+    });
+    floater(x, y, (heart ? "THE FERROUS HEART" : "A STORM WARDEN") + " STIRS", COL.twin);
     AU.split();
-    burst(s.x, s.y, COL.twin, 18, 220);
+  }
+
+  function splitBurst(s, n) {
     var a0 = rnd() * 6.283;
-    for (var k = 0; k < 2; k++) {
-      var a = a0 + k * Math.PI, sp = 230 + rnd() * 60;
-      // spawn offset from the twin's centre, flying apart: a mini must not
-      // be born inside the core's contact radius (instant capture/overload)
+    for (var k = 0; k < n; k++) {
+      var a = a0 + (k / n) * 6.283, sp = 230 + rnd() * 60;
+      // spawn offset from the parent's centre, flying apart: a mini must
+      // not be born inside the core's contact radius (instant capture)
       state.shards.push({
-        x: s.x + Math.cos(a) * 27, y: s.y + Math.sin(a) * 27,
+        x: s.x + Math.cos(a) * (s.r + 10), y: s.y + Math.sin(a) * (s.r + 10),
         vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
-        r: 8, north: k === 0, kind: "mini",
+        r: 8, north: k % 2 === 0, kind: "mini",
         rot: rnd() * 6.28, vr: (rnd() - 0.5) * 4, trail: [],
         inLens: false, lensCd: 0.35
       });
     }
+  }
+
+  function splitTwin(s) {
+    state.stats.splits++;
+    AU.split();
+    burst(s.x, s.y, COL.twin, 18, 220);
+    splitBurst(s, 2);
+  }
+
+  // a boss absorbs a destruction event at the cost of 1 hp: it bursts,
+  // sheds points and spends a moment unable to touch the core, but it
+  // does not die. Returns true when the event was absorbed — the
+  // caller must NOT remove the shard in that case.
+  function bossAbsorb(s) {
+    if (s.kind !== "boss" || s.hp <= 1) return false;
+    s.hp--;
+    s.fieldTime = 0;
+    s.bossCd = 0.8;
+    burst(s.x, s.y, COL.twin, 16, 230);
+    addScore(100, s.x, s.y, "BOSS HIT +");
+    AU.shatter();
+    return true;
+  }
+
+  function bossDown(s) {
+    state.stats.bosses++;
+    var heart = s.maxHp >= 5;
+    addScore(heart ? 1400 : 500, s.x, s.y, (heart ? "HEART STILLED +" : "WARDEN DOWN +"));
+    burst(s.x, s.y, COL.twin, 36, 320);
+    burst(s.x, s.y, COL.energy, 20, 240);
+    AU.mineBoom();
+    splitBurst(s, heart ? 4 : 2);
+  }
+
+  // split-kin bookkeeping for a shard that was truly destroyed
+  function onShardDestroyed(s) {
+    if (s.kind === "twin") splitTwin(s);
+    else if (s.kind === "boss") bossDown(s);
   }
 
   // ---------- effects ----------
@@ -416,6 +546,15 @@
     }
   }
   function floater(x, y, text, color) {
+    // keep popups fully on-canvas: score text centres on its event, so
+    // wall impacts and long labels used to spill past the left/right
+    // edge and clip mid-word. Estimate the drawn half-width (bold 15px)
+    // and clamp the centre inside the arena.
+    var half = text.length * 4.2 + 8;
+    if (x < half + 4) x = half + 4;
+    if (x > W - half - 4) x = W - half - 4;
+    if (y < TOP + 14) y = TOP + 14;
+    if (y > H - 8) y = H - 8;
     state.floats.push({ x: x, y: y, text: text, color: color, life: 1.0 });
   }
   function addScore(base, x, y, label) {
@@ -452,10 +591,11 @@
       d = dist(player, state.shards[i]);
       if (d < R) {
         var s = state.shards[i];
+        if (bossAbsorb(s)) continue;
         burst(s.x, s.y, COL.energy, 8, 160);
         state.shards.splice(i, 1);
         state.score += 25;
-        if (s.kind === "twin") splitTwin(s);
+        onShardDestroyed(s);
       }
     }
     for (i = state.mines.length - 1; i >= 0; i--) {
@@ -591,6 +731,7 @@
     state.timePlayed += dt;
     if (state.shake > 0) state.shake = Math.max(0, state.shake - dt * 22);
     if (state.waveBanner > 0) state.waveBanner -= dt;
+    if (state.chapterBanner > 0) state.chapterBanner -= dt;
     if (player.invuln > 0) player.invuln -= dt;
     if (player.flipAnim > 0) player.flipAnim = Math.max(0, player.flipAnim - dt * 5);
     if (player.comboTimer > 0) { player.comboTimer -= dt; if (player.comboTimer <= 0) player.combo = 0; }
@@ -613,13 +754,10 @@
     for (i = player.trail.length - 1; i >= 0; i--) { player.trail[i].life -= dt; if (player.trail[i].life <= 0) player.trail.splice(i, 1); }
 
     // spawning
-    if (state.spawnQueue > 0 || state.twinQueue > 0 || state.minesQueue > 0) {
+    if (state.spawnQueue > 0 || state.twinQueue > 0 || state.minesQueue > 0 || state.bossQueue > 0) {
       state.spawnTimer -= dt;
       if (state.spawnTimer <= 0) {
-        var roll = rnd();
-        if (state.minesQueue > 0 && (state.spawnQueue + state.twinQueue === 0 || roll < 0.22)) { spawnMine(); state.minesQueue--; }
-        else if (state.twinQueue > 0 && (state.spawnQueue === 0 || roll < 0.45)) { spawnShard("twin"); state.twinQueue--; }
-        else if (state.spawnQueue > 0) { spawnShard("norm"); state.spawnQueue--; }
+        spawnOne();
         state.spawnTimer = spawnInterval();
       }
     } else if (state.shards.length === 0 && state.mines.length === 0) {
@@ -644,6 +782,7 @@
       var inField = applyAnchors(s, dt);
       s.fieldTime = inField ? (s.fieldTime || 0) + dt : 0;
       if (s.fieldTime > 4) {
+        if (bossAbsorb(s)) continue;
         // destabilized by long field exposure: pops where it floats
         burst(s.x, s.y, COL.twin, 12, 180);
         addScore(25, s.x, s.y, "FIELD POP +");
@@ -651,7 +790,7 @@
         player.energy = Math.min(100, player.energy + 4);
         AU.shatter();
         state.shards.splice(i, 1);
-        if (s.kind === "twin") splitTwin(s);
+        onShardDestroyed(s);
         continue;
       }
       if (opposite) {
@@ -664,6 +803,7 @@
       s.trail.push({ x: s.x, y: s.y, life: 0.22 });
       if (s.trail.length > 7) s.trail.shift();
       for (j = s.trail.length - 1; j >= 0; j--) { s.trail[j].life -= dt; if (s.trail[j].life <= 0) s.trail.splice(j, 1); }
+      if (s.bossCd > 0) s.bossCd -= dt;
 
       // polarity lenses flip a crossing shard; contact below must judge
       // the shard by its NEW polarity, so refresh the relation here
@@ -671,21 +811,32 @@
 
       // wall shatter for fast shards
       if ((s.x < s.r || s.x > W - s.r || s.y < s.r + TOP || s.y > H - s.r) && spd > 255) {
-        burst(s.x, s.y, s.north ? COL.north : COL.south, 12, 200);
-        addScore(s.kind === "twin" ? 80 : (s.kind === "mini" ? 25 : 50), s.x, s.y, "SHATTER +");
-        state.stats.shatters++;
-        player.energy = Math.min(100, player.energy + 8);
-        AU.shatter();
-        state.shards.splice(i, 1);
-        if (s.kind === "twin") splitTwin(s);
-        continue;
+        if (bossAbsorb(s)) {
+          // the warden ricochets off the wall instead of shattering
+          s.vx *= -0.55; s.vy *= -0.55;
+        } else {
+          burst(s.x, s.y, s.north ? COL.north : COL.south, 12, 200);
+          addScore(s.kind === "twin" ? 80 : (s.kind === "mini" ? 25 : 50), s.x, s.y, "SHATTER +");
+          state.stats.shatters++;
+          player.energy = Math.min(100, player.energy + 8);
+          AU.shatter();
+          state.shards.splice(i, 1);
+          onShardDestroyed(s);
+          continue;
+        }
       }
       s.x = Math.max(s.r, Math.min(W - s.r, s.x));
       s.y = Math.max(s.r + TOP, Math.min(H - s.r, s.y));
 
-      // player contact
-      if (d < player.r + s.r - 2) {
+      // player contact (a boss that just shed a hit point cannot touch
+      // the core until its recoil moment passes)
+      if (d < player.r + s.r - 2 && !(s.kind === "boss" && s.bossCd > 0)) {
         if (opposite) {
+          if (bossAbsorb(s)) {
+            // recoils out of the core's grip instead of being eaten
+            s.vx = ux * -340; s.vy = uy * -340;
+            continue;
+          }
           // CAPTURE
           player.combo++; player.comboTimer = 2.5;
           addScore(s.kind === "twin" ? 150 : (s.kind === "mini" ? 50 : 100), s.x, s.y, "CAPTURE +");
@@ -694,12 +845,21 @@
           burst(s.x, s.y, s.north ? COL.north : COL.south, 14, 170);
           AU.capture(player.combo);
           state.shards.splice(i, 1);
-          if (s.kind === "twin") splitTwin(s);
+          onShardDestroyed(s);
           continue;
         } else {
+          if (s.kind === "boss") {
+            // a warden is too massive to be eaten by an overload: it
+            // mauls the core and is flung clear, unharmed but spent
+            burst(s.x, s.y, COL.bad, 12, 200);
+            s.vx = ux * -380; s.vy = uy * -380;
+            s.bossCd = 0.9;
+            damagePlayer(s.x, s.y);
+            continue;
+          }
           burst(s.x, s.y, COL.bad, 12, 200);
           state.shards.splice(i, 1);
-          if (s.kind === "twin") splitTwin(s);
+          onShardDestroyed(s);
           damagePlayer(s.x, s.y);
           continue;
         }
@@ -719,8 +879,11 @@
           state.stats.mineSmashes++;
           AU.mineBoom();
           state.mines.splice(i, 1);
-          state.shards.splice(j, 1);
-          if (s.kind === "twin") splitTwin(s);
+          if (s.kind !== "boss") {
+            // a boss used as the hammer ploughs through, unharmed
+            state.shards.splice(j, 1);
+            onShardDestroyed(s);
+          }
           break;
         }
       }
@@ -851,7 +1014,7 @@
     ctx.globalAlpha = 1;
     ctx.save();
     ctx.translate(s.x, s.y); ctx.rotate(s.rot);
-    if (s.kind === "twin") {
+    if (s.kind === "twin" || s.kind === "boss") {
       // TWINCORE: two fused triangles (a diamond) with a glowing seam
       ctx.shadowColor = COL.twin; ctx.shadowBlur = 18;
       ctx.fillStyle = c;
@@ -880,6 +1043,28 @@
       ctx.fillText(s.north ? "−" : "+", 0, 1);
     }
     ctx.restore();
+    if (s.kind === "boss") {
+      // warden regalia, drawn unrotated: a dashed halo, hit-point pips
+      // and its name, so a first-time player can read the fight at a
+      // glance — big, named, and visibly wearing down
+      ctx.save();
+      ctx.translate(s.x, s.y);
+      ctx.strokeStyle = COL.twin; ctx.lineWidth = 1.6; ctx.globalAlpha = 0.8;
+      ctx.setLineDash([6, 7]); ctx.lineDashOffset = -state.t * 18;
+      ctx.beginPath(); ctx.arc(0, 0, s.r + 7, 0, 6.283); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+      for (var hp = 0; hp < s.maxHp; hp++) {
+        ctx.fillStyle = hp < s.hp ? COL.twin : "rgba(255,255,255,0.18)";
+        ctx.fillRect(-s.maxHp * 6 + hp * 12 + 1, -s.r - 17, 9, 4);
+      }
+      if (s.x > 100 && s.x < W - 100) {
+        ctx.fillStyle = COL.twin;
+        ctx.font = "bold 11px 'Segoe UI', sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(s.name, 0, s.r + 15);
+      }
+      ctx.restore();
+    }
   }
 
   function drawMine(m) {
@@ -1039,7 +1224,8 @@
     text("FRENZY", W / 2 + 10, 116, "900 84px 'Segoe UI', sans-serif", COL.south, "left");
     text("P O L A R I T Y   A R E N A", W / 2, 164, "bold 17px 'Segoe UI', sans-serif", COL.dim);
     text("The reactor scattered its shards. You are the magnet sent to eat them.", W / 2, 206, "16px 'Segoe UI', sans-serif", COL.text);
-    var y = 244;
+    text("Five storms. Five Wardens. One Heart to still.", W / 2, 228, "italic bold 15px 'Segoe UI', sans-serif", "#ffd35c");
+    var y = 252;
     var lines = [
       ["SPACE / CLICK", "flip polarity — cyan NORTH −  ·  coral SOUTH +"],
       ["OPPOSITES", "are pulled in: touch them softly to CAPTURE (+100, combo, energy)"],
@@ -1080,12 +1266,24 @@
         if (!ok) text("✕", mouse.x, mouse.y - 30, "bold 16px sans-serif", COL.bad);
       }
     }
+    // one-line teaching at the two deployment debuts
+    if (state.pendingWave === 2) {
+      text("NEW: ANCHOR satellites — click to place them; their fields bend shards for the whole run", W / 2, H - 140, "bold 14px 'Segoe UI', sans-serif", "#ffd35c");
+    } else if (state.pendingWave === 4) {
+      text("NEW: a LENS slot — press T, then click to place a gate that flips any shard crossing it", W / 2, H - 140, "bold 14px 'Segoe UI', sans-serif", "#ffd35c");
+    }
     // panel
     ctx.fillStyle = "rgba(5,8,20,0.82)"; ctx.fillRect(0, H - 118, W, 118);
     ctx.strokeStyle = "rgba(90,130,220,0.3)"; ctx.beginPath(); ctx.moveTo(0, H - 117.5); ctx.lineTo(W, H - 117.5); ctx.stroke();
-    text("DEPLOY — WAVE " + state.pendingWave + " INCOMING", W / 2, H - 100, "900 21px 'Segoe UI', sans-serif", COL.text);
+    var depTitle = "DEPLOY — WAVE " + state.pendingWave + " INCOMING";
+    if (isChapterStart(state.pendingWave)) {
+      var nch = chapterFor(state.pendingWave);
+      depTitle = "DEPLOY — CHAPTER " + nch.num + ": " + nch.name + " · WAVE " + state.pendingWave;
+    }
+    text(depTitle, W / 2, H - 100, "900 21px 'Segoe UI', sans-serif", COL.text);
     var c = state.nextComp;
     text("incoming: " + (c.shards + c.twins) + " shards" + (c.twins ? " (incl. " + c.twins + " twincores)" : "") + "  ·  " + c.mines + " feral mines" +
+         (c.bosses ? "  ·  ⚠ " + (state.pendingWave === 10 ? "THE FERROUS HEART" : "a STORM WARDEN") : "") +
          "      anchors: " + state.anchors.length + " / " + state.anchorSlots +
          (state.lensSlots > 0 ? "      lenses: " + state.lenses.length + " / " + state.lensSlots : ""),
          W / 2, H - 74, "14px 'Segoe UI', sans-serif", COL.dim);
@@ -1100,11 +1298,11 @@
   function drawEnd(win) {
     ctx.fillStyle = "rgba(4,7,18,0.72)"; ctx.fillRect(0, TOP, W, H - TOP);
     text(win ? "CORE STABILIZED!" : "CORE BREACH", W / 2, 178, "900 58px 'Segoe UI', sans-serif", win ? COL.good : COL.bad);
-    text(win ? "You ate the storm through wave 10. The reactor hums your name."
+    text(win ? "Campaign complete — five storms weathered, the Ferrous Heart stilled. The reactor hums your name."
              : "The shards scattered your core across the arena.", W / 2, 226, "17px 'Segoe UI', sans-serif", COL.text);
     text("FINAL SCORE   " + state.score, W / 2, 282, "bold 30px 'Segoe UI', sans-serif", COL.text);
     var st = state.stats;
-    text("Captures " + st.captures + "   ·   Shatters " + st.shatters + "   ·   Mine smashes " + st.mineSmashes + "   ·   Twincores split " + st.splits + "   ·   Lens flips " + st.lensFlips + "   ·   Overloads " + st.overloads,
+    text("Captures " + st.captures + "   ·   Shatters " + st.shatters + "   ·   Mine smashes " + st.mineSmashes + "   ·   Twincores split " + st.splits + "   ·   Lens flips " + st.lensFlips + "   ·   Wardens felled " + st.bosses + "   ·   Overloads " + st.overloads,
          W / 2, 318, "15px 'Segoe UI', sans-serif", COL.dim);
     text("Wave reached " + state.wave + "   ·   Best " + state.best + "   ·   Time " + Math.floor(state.timePlayed) + "s", W / 2, 344, "16px 'Segoe UI', sans-serif", COL.dim);
     buttons = [];
@@ -1150,7 +1348,16 @@
     if (state.mode === "deploy") drawDeploy();
     if (state.mode === "over") drawEnd(false);
     if (state.mode === "win") drawEnd(true);
-    if (state.mode === "playing" && state.waveBanner > 0) {
+    if (state.mode === "playing" && state.chapterBanner > 0) {
+      // chapter card: the chapter's name, the idea it teaches, the wave
+      var ch = chapterFor(state.wave);
+      ctx.globalAlpha = Math.min(1, state.chapterBanner);
+      text("CHAPTER " + ch.num, W / 2, 106, "bold 15px 'Segoe UI', sans-serif", "#ffd35c");
+      text(ch.name, W / 2, 140, "900 40px 'Segoe UI', sans-serif", COL.text);
+      text(ch.line, W / 2, 174, "15px 'Segoe UI', sans-serif", COL.dim);
+      text("— WAVE " + state.wave + " —", W / 2, 202, "bold 13px 'Segoe UI', sans-serif", COL.dim);
+      ctx.globalAlpha = 1;
+    } else if (state.mode === "playing" && state.waveBanner > 0) {
       ctx.globalAlpha = Math.min(1, state.waveBanner);
       text("WAVE " + state.wave, W / 2, 130, "900 46px 'Segoe UI', sans-serif", COL.text);
       ctx.globalAlpha = 1;
@@ -1185,6 +1392,7 @@
     get state() { return state; },
     get player() { return player; },
     get ghost() { return deployGhost; },
+    get chapters() { return CHAPTERS; },
     startRun: startRun,
     confirmDeploy: confirmDeploy,
     enterDeploy: enterDeploy,

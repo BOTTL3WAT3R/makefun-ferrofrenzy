@@ -29,7 +29,32 @@ no server, no network — one HTML file, one CSS file, two JS files
   screen swaps polarity.
 - **Twincores** — violet diamonds that split into two fast minis of opposite
   poles when destroyed. Kill one carelessly and the room gets busier.
-- **Win** — clear wave 10. Then endless mode, if you want it.
+- **Win** — clear wave 10 and fell the Ferrous Heart (see *The campaign*).
+  Then endless mode, if you want it.
+
+## The campaign
+
+The ten waves are a campaign of **five named chapters**, two waves each.
+Every chapter opens with a name card that teaches one idea, leans its
+enemy mix toward that mechanic, and ends in a boss wave:
+
+1. **First Polarity** (waves 1–2) — shards only; flip, capture, shatter.
+2. **The Splitting Storm** (waves 3–4) — twincores and the first feral
+   mines; lenses come online at the wave-4 deployment.
+3. **The Lensfall** (waves 5–6) — a twincore-heavy mix built around
+   routing shards through lens gates.
+4. **The Strong Field** (waves 7–8) — the full architecture online:
+   four anchors, two lenses.
+5. **The Ferrous Heart** (waves 9–10) — the densest storm, and the
+   Heart itself.
+
+Bosses are **Storm Wardens** — twincores scaled up with hit points
+(3 HP on waves 2/4/6/8). Captures, wall shatters, field pops and pulses
+each cost a Warden 1 HP instead of killing it; on its last HP it bursts
+into minis and pays a bounty. Wave 10's boss is **the Ferrous Heart**
+(5 HP, larger, four minis). Felling it completes the campaign on a
+victory screen (score, time, wardens felled); endless mode — the arena
+running on, wardens included — unlocks there.
 
 ## The strategy layer: Anchors and Lenses
 
