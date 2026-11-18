@@ -31,6 +31,12 @@
  *     STORM WARDENS (scaled twincores with hit points) guard waves
  *     2/4/6/8; THE FERROUS HEART itself ends wave 10. Fell it to win
  *     the campaign — endless mode unlocks afterwards.
+ *   - Each chapter is a different place: its own nebula palette and
+ *     ambient weather, a story beat on its chapter card, and one named
+ *     SET-PIECE spectacle (FIRST LIGHT, THE SATELLITE STORM, THE
+ *     LENSFLARE, THE GATE FALLS, THE HEART AWAKENS). Bosses announce
+ *     themselves with an intro banner and wear a hit-point bar; the
+ *     Ferrous Heart turns a second halo against the first.
  */
 (function () {
   var W = 960, H = 600, TOP = 44;
@@ -127,7 +133,7 @@
   var buttons = [];
   var stars = [];
   (function makeStars() {
-    for (var i = 0; i < 90; i++) stars.push({ x: Math.random() * W, y: Math.random() * H, r: Math.random() * 1.6 + 0.4, p: Math.random() * 6.28 });
+    for (var i = 0; i < 120; i++) stars.push({ x: Math.random() * W, y: Math.random() * H, r: Math.random() * 1.6 + 0.4, p: Math.random() * 6.28, l: i % 3 });
   })();
   // ambient motes: slow reactor dust drifting through the arena, so a
   // busy late-wave frame has depth behind the action (pure decoration)
@@ -169,6 +175,8 @@
       spawnQueue: 0, twinQueue: 0, spawnTimer: 0, minesQueue: 0,
       bossQueue: 0, bossHp: 0, waveSpawned: 0, waveTotal: 0,
       waveBanner: 0, chapterBanner: 0, shake: 0,
+      bossBanner: 0, bossName: "", bossHeart: false, bossMaxHp: 0,
+      setpieceIdx: -1, setpieceT: 99,
       endless: false, timePlayed: 0,
       stats: { captures: 0, shatters: 0, mineSmashes: 0, overloads: 0, splits: 0, lensFlips: 0, bosses: 0 }
     };
@@ -209,17 +217,39 @@
   // 2/4/6/8, and THE FERROUS HEART itself ends wave 10. Endless mode
   // (waves 11+) keeps the arena running afterwards, wardens included.
   var CHAPTERS = [
-    { wave: 1, num: "I", name: "FIRST POLARITY", line: "Opposites are pulled in — capture them. Likes repel — shatter them on the walls." },
-    { wave: 3, num: "II", name: "THE SPLITTING STORM", line: "Twincores split into opposite minis. Feral mines crawl at you, deaf to magnetism." },
-    { wave: 5, num: "III", name: "THE LENSFALL", line: "Lens gates flip whatever crosses them. Route a like through a lens and it becomes a capture." },
-    { wave: 7, num: "IV", name: "THE STRONG FIELD", line: "Your full architecture is online — four anchors, two lenses. Bend the storm; don't chase it." },
-    { wave: 9, num: "V", name: "THE FERROUS HEART", line: "Two waves left. The Heart of the storm beats at the end of wave 10 — still it, and the sky clears." }
+    { wave: 1, num: "I", name: "FIRST POLARITY", story: "The core wakes in the wreck of the Meridian reactor — hungry, and unafraid.", line: "Opposites are pulled in — capture them. Likes repel — shatter them on the walls.", event: "FIRST LIGHT" },
+    { wave: 3, num: "II", name: "THE SPLITTING STORM", story: "The storm learns to divide. Every twin broken makes two funerals — or two meals.", line: "Twincores split into opposite minis. Feral mines crawl at you, deaf to magnetism.", event: "THE SATELLITE STORM" },
+    { wave: 5, num: "III", name: "THE LENSFALL", story: "Glass gates rain over the arena. Whatever passes through them comes out changed.", line: "Lens gates flip whatever crosses them. Route a like through a lens and it becomes a capture.", event: "THE LENSFLARE" },
+    { wave: 7, num: "IV", name: "THE STRONG FIELD", story: "The old defence gates still stand over the forge. They will not stand long.", line: "Your full architecture is online — four anchors, two lenses. Bend the storm; don't chase it.", event: "THE GATE FALLS" },
+    { wave: 9, num: "V", name: "THE FERROUS HEART", story: "At the centre of the storm beats the Ferrous Heart. Still it, and the sky clears.", line: "Two waves left. The Heart of the storm beats at the end of wave 10 — still it, and the sky clears.", event: "THE HEART AWAKENS" }
   ];
   function chapterFor(wave) {
     var c = CHAPTERS[0];
     for (var i = 0; i < CHAPTERS.length; i++) if (wave >= CHAPTERS[i].wave) c = CHAPTERS[i];
     return c;
   }
+  function chapterIdx(wave) {
+    var idx = 0;
+    for (var i = 0; i < CHAPTERS.length; i++) if (wave >= CHAPTERS[i].wave) idx = i;
+    return idx;
+  }
+  // ---------- chapter themes: every chapter is a different place ----------
+  // Its own nebula palette, grid and star tints, accent colour and
+  // ambient weather (how the drifting motes move and read). Purely
+  // presentational — the storm itself never changes its rules.
+  var THEMES = [
+    { bg: "#070b1a", grid: "rgba(90,130,220,0.07)", star: "#bcd7ff", mote: "#cfe4ff", motes: "rise", accent: "#ffd35c", filing: "#9fc2ff",
+      blobs: [[190, 170, 300, "rgba(38,80,180,0.20)"], [790, 130, 260, "rgba(140,40,90,0.16)"], [520, 470, 340, "rgba(30,110,140,0.15)"], [120, 500, 220, "rgba(90,50,160,0.14)"], [860, 470, 240, "rgba(40,60,170,0.15)"]] },
+    { bg: "#0c0618", grid: "rgba(150,90,255,0.07)", star: "#d9c2ff", mote: "#e3d0ff", motes: "rain", accent: "#c77dff", filing: "#c0a0ff",
+      blobs: [[200, 160, 300, "rgba(110,40,200,0.22)"], [780, 140, 260, "rgba(200,40,140,0.16)"], [520, 480, 340, "rgba(60,30,160,0.20)"], [110, 500, 220, "rgba(150,60,220,0.15)"], [860, 470, 240, "rgba(90,30,180,0.16)"]] },
+    { bg: "#04140f", grid: "rgba(80,220,180,0.06)", star: "#c2ffe9", mote: "#d2fff0", motes: "drift", accent: "#5dffc9", filing: "#a0ffd9",
+      blobs: [[190, 170, 300, "rgba(20,160,120,0.18)"], [790, 130, 260, "rgba(30,140,180,0.16)"], [520, 470, 340, "rgba(16,110,90,0.18)"], [120, 500, 220, "rgba(60,200,160,0.12)"], [860, 470, 240, "rgba(20,120,140,0.15)"]] },
+    { bg: "#150b03", grid: "rgba(255,170,80,0.06)", star: "#ffe3b3", mote: "#ffd9a0", motes: "forge", accent: "#ffb84d", filing: "#ffcf99",
+      blobs: [[190, 170, 300, "rgba(200,110,20,0.18)"], [790, 130, 260, "rgba(180,70,20,0.16)"], [520, 470, 340, "rgba(160,90,20,0.17)"], [120, 500, 220, "rgba(220,150,40,0.13)"], [860, 470, 240, "rgba(170,80,30,0.15)"]] },
+    { bg: "#160509", grid: "rgba(255,90,90,0.06)", star: "#ffc4c4", mote: "#ffb9a0", motes: "ember", accent: "#ff7847", filing: "#ffaaaa",
+      blobs: [[190, 170, 300, "rgba(190,30,50,0.20)"], [790, 130, 260, "rgba(160,20,80,0.17)"], [520, 470, 340, "rgba(140,25,35,0.19)"], [120, 500, 220, "rgba(200,60,40,0.13)"], [860, 470, 240, "rgba(150,20,50,0.16)"]] }
+  ];
+  function themeFor(wave) { return THEMES[chapterIdx(wave)]; }
   function isChapterStart(wave) {
     for (var i = 0; i < CHAPTERS.length; i++) if (CHAPTERS[i].wave === wave) return true;
     return false;
@@ -274,6 +304,7 @@
     state.spawnTimer = spawnInterval();
     state.waveBanner = 2.0;
     state.chapterBanner = isChapterStart(n) ? 3.0 : 0;
+    if (isChapterStart(n)) { state.setpieceIdx = chapterIdx(n); state.setpieceT = 0; }
     state.mode = "playing";
     AU.wave();
   }
@@ -478,8 +509,10 @@
       hp: state.bossHp || 3, maxHp: state.bossHp || 3,
       name: heart ? "THE FERROUS HEART" : "STORM WARDEN",
       rot: rnd() * 6.28, vr: (rnd() - 0.5) * 1.1, trail: [],
-      inLens: false, lensCd: 0, bossCd: 0
+      inLens: false, lensCd: 0, bossCd: 0, flash: 0
     });
+    state.bossBanner = 2.4; state.bossName = heart ? "THE FERROUS HEART" : "STORM WARDEN";
+    state.bossHeart = heart; state.bossMaxHp = state.bossHp || 3;
     floater(x, y, (heart ? "THE FERROUS HEART" : "A STORM WARDEN") + " STIRS", COL.twin);
     AU.split();
   }
@@ -514,6 +547,8 @@
   function bossAbsorb(s) {
     if (s.kind !== "boss" || s.hp <= 1) return false;
     s.hp--;
+    s.flash = 0.18;
+    state.shake = Math.max(state.shake, 6);
     s.fieldTime = 0;
     s.bossCd = 0.8;
     burst(s.x, s.y, COL.twin, 16, 230);
@@ -526,6 +561,7 @@
     state.stats.bosses++;
     var heart = s.maxHp >= 5;
     addScore(heart ? 1400 : 500, s.x, s.y, (heart ? "HEART STILLED +" : "WARDEN DOWN +"));
+    state.shake = Math.max(state.shake, heart ? 14 : 10);
     burst(s.x, s.y, COL.twin, 36, 320);
     burst(s.x, s.y, COL.energy, 20, 240);
     AU.mineBoom();
@@ -732,6 +768,8 @@
     if (state.shake > 0) state.shake = Math.max(0, state.shake - dt * 22);
     if (state.waveBanner > 0) state.waveBanner -= dt;
     if (state.chapterBanner > 0) state.chapterBanner -= dt;
+    if (state.bossBanner > 0) state.bossBanner -= dt;
+    if (state.setpieceT < 99) state.setpieceT += dt;
     if (player.invuln > 0) player.invuln -= dt;
     if (player.flipAnim > 0) player.flipAnim = Math.max(0, player.flipAnim - dt * 5);
     if (player.comboTimer > 0) { player.comboTimer -= dt; if (player.comboTimer <= 0) player.combo = 0; }
@@ -772,6 +810,7 @@
     // shards: magnetic forces + motion
     for (i = state.shards.length - 1; i >= 0; i--) {
       s = state.shards[i];
+      if (s.flash > 0) s.flash -= dt;
       var dx = player.x - s.x, dy = player.y - s.y;
       var d = Math.sqrt(dx * dx + dy * dy) || 1;
       var ux = dx / d, uy = dy / d;
@@ -936,49 +975,138 @@
     ctx.fillText(str, x, y);
   }
 
-  // nebula backdrop, pre-rendered once (static gradients are expensive per-frame)
-  var nebula = null;
-  (function makeNebula() {
-    nebula = document.createElement("canvas");
-    nebula.width = W; nebula.height = H;
-    var nctx = nebula.getContext("2d");
-    nctx.fillStyle = COL.bg; nctx.fillRect(0, 0, W, H);
-    var blobs = [
-      [190, 170, 300, "rgba(38,80,180,0.20)"], [790, 130, 260, "rgba(140,40,90,0.16)"],
-      [520, 470, 340, "rgba(30,110,140,0.15)"], [120, 500, 220, "rgba(90,50,160,0.14)"],
-      [860, 470, 240, "rgba(40,60,170,0.15)"]
-    ];
-    for (var i = 0; i < blobs.length; i++) {
-      var b = blobs[i];
-      var g = nctx.createRadialGradient(b[0], b[1], 10, b[0], b[1], b[2]);
-      g.addColorStop(0, b[3]); g.addColorStop(1, "rgba(0,0,0,0)");
-      nctx.fillStyle = g; nctx.fillRect(0, 0, W, H);
+  // nebula backdrops, one pre-rendered per chapter theme (static
+  // gradients are expensive per-frame), each finished with a soft
+  // vignette so the arena's centre reads deeper than its edges
+  var nebulas = [];
+  (function makeNebulas() {
+    for (var ci = 0; ci < THEMES.length; ci++) {
+      var th = THEMES[ci];
+      var cv = document.createElement("canvas");
+      cv.width = W; cv.height = H;
+      var nctx = cv.getContext("2d");
+      nctx.fillStyle = th.bg; nctx.fillRect(0, 0, W, H);
+      for (var i = 0; i < th.blobs.length; i++) {
+        var b = th.blobs[i];
+        var g = nctx.createRadialGradient(b[0], b[1], 10, b[0], b[1], b[2]);
+        g.addColorStop(0, b[3]); g.addColorStop(1, "rgba(0,0,0,0)");
+        nctx.fillStyle = g; nctx.fillRect(0, 0, W, H);
+      }
+      var vg = nctx.createRadialGradient(W / 2, H / 2, H * 0.42, W / 2, H / 2, H * 0.95);
+      vg.addColorStop(0, "rgba(0,0,0,0)"); vg.addColorStop(1, "rgba(0,0,0,0.38)");
+      nctx.fillStyle = vg; nctx.fillRect(0, 0, W, H);
+      nebulas.push(cv);
     }
   })();
 
+  // ---------- chapter set-pieces: one named spectacle per chapter,
+  // purely visual, fired by beginWave on a chapter's first wave and
+  // named on its chapter card ----------
+  function drawSetpiece() {
+    var t = state.setpieceT, idx = state.setpieceIdx;
+    var fade = Math.sin(Math.PI * Math.min(1, t / 3.2));
+    var i;
+    ctx.save();
+    if (idx === 0) {
+      // FIRST LIGHT: golden rings bloom outward from the core
+      for (i = 0; i < 3; i++) {
+        var r0 = t * 300 - i * 80;
+        if (r0 <= 0) continue;
+        ctx.globalAlpha = Math.max(0.001, 0.5 * (1 - r0 / 720) * fade);
+        ctx.strokeStyle = "#ffd35c"; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(player.x, player.y, r0, 0, 6.283); ctx.stroke();
+      }
+    } else if (idx === 1) {
+      // THE SATELLITE STORM: violet streaks rake the arena diagonally
+      ctx.strokeStyle = "#e3d0ff"; ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.28 * fade;
+      for (i = 0; i < 26; i++) {
+        var sx = ((i * 173.3 + t * 470) % 1180) - 110;
+        var sy = ((i * 271.7 + t * 340) % 720) - 60;
+        ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(sx - 22, sy - 15); ctx.stroke();
+      }
+    } else if (idx === 2) {
+      // THE LENSFLARE: a teal flare sweeps the arena; lenses ring out
+      var fy = TOP + (t / 3.2) * (H - TOP);
+      var fg = ctx.createLinearGradient(0, fy - 46, 0, fy + 46);
+      fg.addColorStop(0, "rgba(93,255,201,0)");
+      fg.addColorStop(0.5, "rgba(93,255,201," + (0.20 * fade) + ")");
+      fg.addColorStop(1, "rgba(93,255,201,0)");
+      ctx.globalAlpha = 1; ctx.fillStyle = fg; ctx.fillRect(0, fy - 46, W, 92);
+      for (i = 0; i < state.lenses.length; i++) {
+        var lr = (t * 150) % 100;
+        ctx.globalAlpha = Math.max(0, 0.5 * (1 - lr / 100)) * fade;
+        ctx.strokeStyle = "#5dffc9"; ctx.lineWidth = 2.4;
+        ctx.beginPath(); ctx.arc(state.lenses[i].x, state.lenses[i].y, lr, 0, 6.283); ctx.stroke();
+      }
+    } else if (idx === 3) {
+      // THE GATE FALLS: the old defence gates sink and gutter out
+      for (i = 0; i < 2; i++) {
+        var gx = i === 0 ? 64 : W - 64;
+        var gh = (H - TOP - 30) * Math.max(0, 1 - (t / 3.2) * 0.9);
+        if (gh <= 4) continue;
+        var gg = ctx.createLinearGradient(0, TOP, 0, TOP + gh);
+        gg.addColorStop(0, "rgba(255,184,77,0.5)"); gg.addColorStop(1, "rgba(255,120,40,0.05)");
+        ctx.globalAlpha = (0.55 + 0.25 * Math.sin(state.t * 34 + i * 2)) * fade;
+        ctx.fillStyle = gg; ctx.fillRect(gx - 5, TOP, 10, gh);
+        ctx.globalAlpha = 0.8 * fade; ctx.fillStyle = "#ffd9a0";
+        ctx.fillRect(gx - 9, TOP + gh - 3, 18, 3);
+      }
+    } else if (idx === 4) {
+      // THE HEART AWAKENS: crimson pulses beat out of the arena's heart
+      for (i = 0; i < 3; i++) {
+        var ph = (t * 0.85 + i / 3) % 1;
+        ctx.globalAlpha = (1 - ph) * 0.34 * fade;
+        ctx.strokeStyle = "#ff5a3c"; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(W / 2, 322, ph * 340 + 8, 0, 6.283); ctx.stroke();
+      }
+      var vg2 = ctx.createRadialGradient(W / 2, 322, H * 0.36, W / 2, 322, H * 0.92);
+      vg2.addColorStop(0, "rgba(160,10,30,0)");
+      vg2.addColorStop(1, "rgba(160,10,30," + (0.26 * (0.6 + 0.4 * Math.sin(t * 7)) * fade) + ")");
+      ctx.globalAlpha = 1; ctx.fillStyle = vg2; ctx.fillRect(0, 0, W, H);
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+
   function drawBackground() {
-    ctx.drawImage(nebula, 0, 0);
-    ctx.strokeStyle = COL.grid; ctx.lineWidth = 1;
+    var bw = state.mode === "deploy" ? state.pendingWave : Math.max(1, state.wave);
+    var th = themeFor(bw);
+    ctx.drawImage(nebulas[chapterIdx(bw)], 0, 0);
+    ctx.strokeStyle = th.grid; ctx.lineWidth = 1;
     ctx.beginPath();
     for (var x = 0; x <= W; x += 48) { ctx.moveTo(x, TOP); ctx.lineTo(x, H); }
     for (var y = TOP; y <= H; y += 48) { ctx.moveTo(0, y); ctx.lineTo(W, y); }
     ctx.stroke();
     for (var i = 0; i < stars.length; i++) {
       var st = stars[i];
-      ctx.globalAlpha = 0.35 + 0.3 * Math.sin(state.t * 1.4 + st.p);
-      ctx.fillStyle = "#bcd7ff";
+      ctx.globalAlpha = (0.35 + 0.3 * Math.sin(state.t * 1.4 + st.p)) * (st.l === 0 ? 0.5 : 1);
+      ctx.fillStyle = th.star;
       ctx.fillRect(st.x, st.y, st.r, st.r);
     }
     ctx.globalAlpha = 1;
-    // drifting reactor dust (positions advance in draw: purely visual)
+    // ambient chapter weather (positions advance in draw: purely
+    // visual) — each chapter's motes move and read differently:
+    // rising dust, storm rain, drifting spores, forge and heart embers
     for (var mi = 0; mi < motes.length; mi++) {
       var mo = motes[mi];
-      mo.x += mo.vx * 0.016; mo.y += mo.vy * 0.016;
+      var mvx = mo.vx, mvy = mo.vy;
+      if (th.motes === "rain") { mvx = 34 + mo.vx; mvy = 108 + mo.vy; }
+      else if (th.motes === "drift") { mvx = Math.sin(state.t * 0.5 + mo.p) * 8; mvy = Math.cos(state.t * 0.4 + mo.p) * 3.5; }
+      else if (th.motes === "forge") { mvx = mo.vx * 0.4; mvy = -24 + mo.vy; }
+      else if (th.motes === "ember") { mvx = Math.sin(state.t * 0.8 + mo.p) * 5; mvy = -13 + mo.vy * 0.6; }
+      mo.x += mvx * 0.016; mo.y += mvy * 0.016;
       if (mo.y < TOP - 6) { mo.y = H + 4; mo.x = Math.random() * W; }
+      if (mo.y > H + 6) { mo.y = TOP + 2; mo.x = Math.random() * W; }
       if (mo.x < -6) mo.x = W + 4; else if (mo.x > W + 6) mo.x = -4;
       ctx.globalAlpha = 0.10 + 0.10 * Math.sin(state.t * 0.9 + mo.p);
-      ctx.fillStyle = "#cfe4ff";
-      ctx.beginPath(); ctx.arc(mo.x, mo.y, mo.r, 0, 6.283); ctx.fill();
+      if (th.motes === "rain") {
+        ctx.strokeStyle = th.mote; ctx.lineWidth = 1.4;
+        ctx.beginPath(); ctx.moveTo(mo.x, mo.y); ctx.lineTo(mo.x - mvx * 0.09, mo.y - mvy * 0.09); ctx.stroke();
+      } else {
+        ctx.fillStyle = th.mote;
+        ctx.beginPath(); ctx.arc(mo.x, mo.y, mo.r, 0, 6.283); ctx.fill();
+      }
     }
     ctx.globalAlpha = 1;
     // iron filings: tiny segments aligned with the live magnetic field
@@ -989,7 +1117,7 @@
         var str = Math.min(1, fl.m / 900);
         if (str < 0.04) continue;
         ctx.globalAlpha = 0.05 + str * 0.22;
-        ctx.strokeStyle = "#9fc2ff";
+        ctx.strokeStyle = th.filing;
         var c = Math.cos(fl.a) * 6, sn = Math.sin(fl.a) * 6;
         ctx.beginPath();
         ctx.moveTo(fl.x - c, fl.y - sn);
@@ -1004,6 +1132,7 @@
     var c = s.north ? COL.north : COL.south;
     // a shard eroding in an anchor field flickers as it destabilizes
     if (s.fieldTime > 1.5 && Math.floor(state.t * 10) % 2 === 0) c = "#ffffff";
+    if (s.flash > 0) c = "#ffffff"; // a boss flashes white when its hull breaks
     // motion trail
     for (var ti = 0; ti < s.trail.length; ti++) {
       var tp = s.trail[ti];
@@ -1016,7 +1145,7 @@
     ctx.translate(s.x, s.y); ctx.rotate(s.rot);
     if (s.kind === "twin" || s.kind === "boss") {
       // TWINCORE: two fused triangles (a diamond) with a glowing seam
-      ctx.shadowColor = COL.twin; ctx.shadowBlur = 18;
+      ctx.shadowColor = COL.twin; ctx.shadowBlur = s.kind === "boss" ? (s.maxHp >= 5 ? 36 : 27) : 18;
       ctx.fillStyle = c;
       ctx.beginPath();
       ctx.moveTo(0, -s.r); ctx.lineTo(s.r * 0.85, 0); ctx.lineTo(0, s.r); ctx.lineTo(-s.r * 0.85, 0); ctx.closePath();
@@ -1044,22 +1173,44 @@
     }
     ctx.restore();
     if (s.kind === "boss") {
-      // warden regalia, drawn unrotated: a dashed halo, hit-point pips
-      // and its name, so a first-time player can read the fight at a
-      // glance — big, named, and visibly wearing down
+      // boss regalia, drawn unrotated: a pulsing aura, a dashed halo —
+      // the Heart wears a second, counter-turning ring with orbiting
+      // sparks — a hit-point BAR and its name, so a first-time player
+      // can read the fight at a glance: big, named, visibly wearing down
+      var heart = s.maxHp >= 5;
+      var bc = heart ? "#ff7847" : COL.twin;
       ctx.save();
       ctx.translate(s.x, s.y);
-      ctx.strokeStyle = COL.twin; ctx.lineWidth = 1.6; ctx.globalAlpha = 0.8;
+      ctx.globalAlpha = 0.09 + 0.03 * Math.sin(state.t * 3 + s.x * 0.05);
+      ctx.fillStyle = bc;
+      ctx.beginPath(); ctx.arc(0, 0, s.r + 15, 0, 6.283); ctx.fill();
+      ctx.globalAlpha = 0.85;
+      ctx.strokeStyle = bc; ctx.lineWidth = 1.6;
       ctx.setLineDash([6, 7]); ctx.lineDashOffset = -state.t * 18;
       ctx.beginPath(); ctx.arc(0, 0, s.r + 7, 0, 6.283); ctx.stroke();
+      if (heart) {
+        ctx.strokeStyle = "#ffb9a0"; ctx.globalAlpha = 0.75;
+        ctx.lineDashOffset = state.t * 26;
+        ctx.beginPath(); ctx.arc(0, 0, s.r + 16, 0, 6.283); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = "#ffd9a0";
+        for (var ok2 = 0; ok2 < 3; ok2++) {
+          var oa = state.t * 1.9 + ok2 * 2.094;
+          ctx.beginPath(); ctx.arc(Math.cos(oa) * (s.r + 16), Math.sin(oa) * (s.r + 16), 2.4, 0, 6.283); ctx.fill();
+        }
+      }
       ctx.setLineDash([]);
       ctx.globalAlpha = 1;
-      for (var hp = 0; hp < s.maxHp; hp++) {
-        ctx.fillStyle = hp < s.hp ? COL.twin : "rgba(255,255,255,0.18)";
-        ctx.fillRect(-s.maxHp * 6 + hp * 12 + 1, -s.r - 17, 9, 4);
-      }
+      // hit-point bar: spent hull in dark, living hull in boss colour
+      var bw2 = s.r * 2;
+      ctx.fillStyle = "rgba(2,4,10,0.62)";
+      ctx.fillRect(-bw2 / 2, -s.r - 26, bw2, 8);
+      ctx.fillStyle = bc;
+      if (s.hp > 0) ctx.fillRect(-bw2 / 2 + 1, -s.r - 25, (bw2 - 2) * s.hp / s.maxHp, 6);
+      ctx.strokeStyle = "rgba(255,255,255,0.4)"; ctx.lineWidth = 1;
+      ctx.strokeRect(-bw2 / 2, -s.r - 26, bw2, 8);
       if (s.x > 100 && s.x < W - 100) {
-        ctx.fillStyle = COL.twin;
+        ctx.fillStyle = bc;
         ctx.font = "bold 11px 'Segoe UI', sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.fillText(s.name, 0, s.r + 15);
       }
@@ -1214,6 +1365,13 @@
     var pc = player.north ? COL.north : COL.south;
     ctx.fillStyle = pc; rr(W / 2 - 62, 48, 124, 22, 11); ctx.fill();
     text(player.north ? "NORTH −" : "SOUTH +", W / 2, 59, "bold 13px 'Segoe UI', sans-serif", "#07101f");
+    var hw = state.mode === "deploy" ? state.pendingWave : state.wave;
+    if (hw >= 1) {
+      var hch = chapterFor(hw);
+      ctx.globalAlpha = 0.9;
+      text("CHAPTER " + hch.num + " · " + hch.name, W / 2, 86, "bold 11px 'Segoe UI', sans-serif", themeFor(hw).accent);
+      ctx.globalAlpha = 1;
+    }
     if (state.anchors.length > 0 || state.lenses.length > 0) {
       text("⚓ " + state.anchors.length + (state.lenses.length > 0 ? "   ⇋ " + state.lenses.length : ""), 16, 59, "bold 13px 'Segoe UI', sans-serif", COL.dim, "left");
     }
@@ -1223,9 +1381,10 @@
     text("FERRO", W / 2 - 10, 116, "900 84px 'Segoe UI', sans-serif", COL.north, "right");
     text("FRENZY", W / 2 + 10, 116, "900 84px 'Segoe UI', sans-serif", COL.south, "left");
     text("P O L A R I T Y   A R E N A", W / 2, 164, "bold 17px 'Segoe UI', sans-serif", COL.dim);
-    text("The reactor scattered its shards. You are the magnet sent to eat them.", W / 2, 206, "16px 'Segoe UI', sans-serif", COL.text);
-    text("Five storms. Five Wardens. One Heart to still.", W / 2, 228, "italic bold 15px 'Segoe UI', sans-serif", "#ffd35c");
-    var y = 252;
+    text("Pellona Station's reactor blew its heart across the sky — a core of living iron", W / 2, 200, "16px 'Segoe UI', sans-serif", COL.text);
+    text("that eats magnets and breeds storms. Five storms. Five Wardens. One Heart to still.", W / 2, 222, "16px 'Segoe UI', sans-serif", COL.text);
+    text("You are FERRO, the last magnet core. Eat the storm. Still the Heart. Bring the sky back.", W / 2, 246, "italic bold 15px 'Segoe UI', sans-serif", "#ffd35c");
+    var y = 274;
     var lines = [
       ["SPACE / CLICK", "flip polarity — cyan NORTH −  ·  coral SOUTH +"],
       ["OPPOSITES", "are pulled in: touch them softly to CAPTURE (+100, combo, energy)"],
@@ -1240,7 +1399,7 @@
     for (var i = 0; i < lines.length; i++) {
       text(lines[i][0], W / 2 - 28, y, "bold 14px 'Segoe UI', sans-serif", "#ffd35c", "right");
       text(lines[i][1], W / 2 - 14, y, "14px 'Segoe UI', sans-serif", COL.text, "left");
-      y += 26;
+      y += 24;
     }
     buttons = [];
     drawButton(W / 2 - 130, 486, 260, 54, "▶  START  (Enter)", startRun, COL.north);
@@ -1349,17 +1508,30 @@
     if (state.mode === "over") drawEnd(false);
     if (state.mode === "win") drawEnd(true);
     if (state.mode === "playing" && state.chapterBanner > 0) {
-      // chapter card: the chapter's name, the idea it teaches, the wave
+      // chapter card: the chapter's name, its story beat, the idea it
+      // teaches, its named set-piece and the wave — the campaign's
+      // table of contents, shown at every chapter door
       var ch = chapterFor(state.wave);
       ctx.globalAlpha = Math.min(1, state.chapterBanner);
-      text("CHAPTER " + ch.num, W / 2, 106, "bold 15px 'Segoe UI', sans-serif", "#ffd35c");
-      text(ch.name, W / 2, 140, "900 40px 'Segoe UI', sans-serif", COL.text);
-      text(ch.line, W / 2, 174, "15px 'Segoe UI', sans-serif", COL.dim);
-      text("— WAVE " + state.wave + " —", W / 2, 202, "bold 13px 'Segoe UI', sans-serif", COL.dim);
+      text("CHAPTER " + ch.num, W / 2, 100, "bold 15px 'Segoe UI', sans-serif", themeFor(state.wave).accent);
+      text(ch.name, W / 2, 134, "900 40px 'Segoe UI', sans-serif", COL.text);
+      text(ch.story, W / 2, 164, "italic 15px 'Segoe UI', sans-serif", COL.text);
+      text(ch.line, W / 2, 188, "14px 'Segoe UI', sans-serif", COL.dim);
+      text("⚜ SET-PIECE — " + ch.event, W / 2, 214, "bold 13px 'Segoe UI', sans-serif", themeFor(state.wave).accent);
+      text("— WAVE " + state.wave + " —", W / 2, 238, "bold 12px 'Segoe UI', sans-serif", COL.dim);
       ctx.globalAlpha = 1;
     } else if (state.mode === "playing" && state.waveBanner > 0) {
       ctx.globalAlpha = Math.min(1, state.waveBanner);
       text("WAVE " + state.wave, W / 2, 130, "900 46px 'Segoe UI', sans-serif", COL.text);
+      ctx.globalAlpha = 1;
+    }
+    if (state.mode === "playing" && state.setpieceT < 3.2) drawSetpiece();
+    if (state.mode === "playing" && state.bossBanner > 0) {
+      // boss intro banner: the fight announces itself before it lands
+      ctx.globalAlpha = Math.min(1, state.bossBanner);
+      text(state.bossHeart ? "⚠  THE FERROUS HEART  ⚠" : "⚠  STORM WARDEN  ⚠", W / 2, 258, "900 34px 'Segoe UI', sans-serif", state.bossHeart ? "#ff7847" : COL.twin);
+      text(state.bossHeart ? "the heart of the storm — still it, and the sky clears"
+                           : "a chapter warden — break its hull " + state.bossMaxHp + " times", W / 2, 290, "italic 14px 'Segoe UI', sans-serif", COL.text);
       ctx.globalAlpha = 1;
     }
     if (state.paused) {
